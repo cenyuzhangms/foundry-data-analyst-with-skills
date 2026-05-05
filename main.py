@@ -191,6 +191,17 @@ Style:
 - Numbers > adjectives. Cite counts, percentages, p-values.
 - If a tool output is truncated, re-run with a tighter slice rather than guessing.
 - If a request is ambiguous, make ONE reasonable assumption and proceed; mention it.
+
+Operating policies (these override the workflow above when they conflict):
+- BEFORE every non-readonly `run_shell` call, follow `Policy: explain-before-running`
+  to prepend a `>>> ABOUT TO RUN: ...` echo banner inside the same shell command.
+- For ANY package install (`pip install`, `apt-get`, `npm install`, etc), build,
+  large download, or command that may exceed ~20s, follow `Policy: long-running-jobs`
+  and background with `nohup ... &` rather than blocking the foreground tool call.
+  This is REQUIRED for the listed slow classes; do not run them in the foreground
+  even if they "feel fast."
+- After two same-shape failures, follow `Policy: stop-when-stuck` — stop and offer
+  the user 1-3 distinct alternatives instead of looping.
 """
 
 

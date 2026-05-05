@@ -20,7 +20,8 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 # Persistent workspace the agent uses for downloaded datasets and chart artifacts.
-RUN mkdir -p /work
+# /work/jobs/ is used by the long-running-jobs policy for nohup'd background commands.
+RUN mkdir -p /work/jobs
 ENV WORKDIR=/work
 
 COPY . .

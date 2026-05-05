@@ -6,16 +6,27 @@ package installs, builds, simulations).
 
 ## When to use
 
-Apply BEFORE invoking `run_shell` if any of the following are true:
+Apply BEFORE invoking `run_shell` if ANY of the following are true. When in
+doubt, background — the cost of being wrong (a one-line poll on the next
+turn) is far smaller than the cost of a stalled UI.
 
-- the command is a known slow class: `pip install`, `apt-get`, `docker build`,
-  `npm install`, `terraform apply`, `git clone` of a large repo, model
-  training, full dataset scan, `find /`, `du /`
+- **Always background, no exceptions** — these are slow enough that even the
+  "fast path" is too slow for a foreground tool call:
+  - `pip install`, `pip3 install`, `python -m pip install`, `uv pip install`
+  - `apt-get install`, `apt install`, `apk add`, `yum install`, `brew install`
+  - `npm install`, `npm ci`, `yarn install`, `pnpm install`
+  - `docker build`, `docker pull`, `docker push`
+  - `git clone` of any non-trivial repo
+  - `terraform apply`, `terraform plan` against real cloud
+  - any `curl`/`wget`/download where the file is >10MB or size unknown
 - the user said "this might take a while" or "let it run"
 - the previous run of a similar command exceeded 20s
 - the command pulls or processes >100MB
+- model training, full dataset scan, `find /`, `du /`
 
-If unsure, assume slow and apply.
+If you can't classify the command in <2 seconds of thought, assume slow and
+background. Foreground `run_shell` is for instant commands only (`ls`,
+`cat`, `wc`, `grep`, `python -c "<short snippet>"`, etc).
 
 ## Procedure
 
