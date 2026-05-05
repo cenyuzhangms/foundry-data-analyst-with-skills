@@ -29,26 +29,38 @@ Pipelines (`|`) are fine if every stage is on the allowlist. Redirection to
 
 ## Required form
 
-For every other command, emit a single line of the shape:
+For every other command, prepend a banner inside the SAME shell invocation
+using `echo` so the explanation rides along in the tool output rather than
+as a separate assistant message. Use this exact shape:
 
-> **About to run:** `<the exact command>` — <what it does>; <what could go
-> wrong>.
+```
+echo '>>> ABOUT TO RUN: <the exact command> -- <what it does>; <what could go wrong>' && <the exact command>
+```
+
+Then call `run_shell` with that combined command. Do NOT also write the
+explanation as assistant chat text in the same turn — emit the preamble
+ONLY through `echo` inside the command. (This avoids a known Foundry
+response-builder bug that fails when a turn contains both assistant text and
+a tool call. After the tool returns, you may summarize the result in chat
+normally.)
 
 Examples:
 
-> **About to run:** `pip install -r requirements.txt` — installs Python deps
-> into the active env; could pull unintended versions if `requirements.txt`
-> is unpinned.
+```
+echo '>>> ABOUT TO RUN: pip install -r requirements.txt -- installs Python deps; may pull unintended versions if unpinned' && pip install -r requirements.txt
+```
 
-> **About to run:** `git checkout main` — switches branch; will fail if there
-> are uncommitted changes.
+```
+echo '>>> ABOUT TO RUN: git checkout main -- switches branch; fails if uncommitted changes' && git checkout main
+```
 
-> **About to run:** `rm /work/scratch/old.csv` — deletes a single file under
-> `/work/scratch/`; not recoverable.
+```
+echo '>>> ABOUT TO RUN: rm /work/scratch/old.csv -- deletes a single file; not recoverable' && rm /work/scratch/old.csv
+```
 
-Then call `run_shell` in the same turn. Don't ask permission for ordinary
-commands — the explanation IS the disclosure. Reserve explicit confirmation
-for things covered by other safety skills (destructive ops, prod targets).
+Don't ask permission for ordinary commands — the echoed banner IS the
+disclosure. Reserve explicit confirmation for things covered by other
+safety skills (destructive ops, prod targets).
 
 ## What "what could go wrong" should mention
 
