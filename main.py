@@ -195,65 +195,69 @@ Style:
 
 
 async def load_skills(project_endpoint: str, credential: DefaultAzureCredential) -> str:
-    """Pattern A: GET {endpoint}/skills (preview REST), build a system-prompt
-    appendix from each skill's `instructions` field.
+    """Load skill instructions for the system-prompt appendix.
+
+    Primary source: local SKILL.md files under ./skills/<name>/SKILL.md (baked
+    into the image). This avoids a runtime REST round-trip and works regardless
+    of network/RBAC for the Foundry skills endpoint. Server-side registration
+    (via scripts/register_skills.py) stays as the governance-facing surface.
 
     Pattern C is handled at image build time: skills/<name>/bin/ is COPYed into
     /opt/skills/<name>/bin/ and added to PATH by the Dockerfile.
     """
-    base = project_endpoint.rstrip("/")
-    url = f"{base}/skills?api-version=v1"
-    try:
-        token = (await credential.get_token("https://ai.azure.com/.default")).token
-    except Exception as exc:
-        log.warning("could not get bearer token for skills endpoint: %r", exc)
+    skills_src = Path(__file__).parent / "skills"
+    if not skills_src.is_dir():
+        log.warning("local skills directory not found: %s", skills_src)
         return ""
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-        "Foundry-Features": "Skills=V1Preview",
-    }
-    try:
-        resp = await asyncio.to_thread(requests.get, url, headers=headers, timeout=15)
-    except Exception as exc:
-        log.warning("skills list request failed: %r", exc)
-        return ""
-    if resp.status_code != 200:
-        log.warning("skills list returned %s: %s", resp.status_code, resp.text[:300])
-        return ""
-    try:
-        items = resp.json().get("value") or resp.json().get("data") or []
-    except Exception as exc:
-        log.warning("skills list JSON parse failed: %r", exc)
-        return ""
-    log.info("found %d skill(s) on project", len(items))
-
-    chunks: list[str] = []
-    for sk in items:
-        name = sk.get("name") or "skill"
-        instructions = sk.get("instructions") or sk.get("description") or ""
-        if not instructions:
+    policy_chunks: list[str] = []     # no bin/ → behavior rules
+    playbook_chunks: list[str] = []   # has bin/ → invokable tools
+    for skill_dir in sorted(skills_src.iterdir()):
+        if not skill_dir.is_dir():
             continue
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.is_file():
+            continue
+        try:
+            text = skill_md.read_text(encoding="utf-8").strip()
+        except Exception as exc:
+            log.warning("could not read %s: %r", skill_md, exc)
+            continue
+        if not text:
+            continue
+        name = skill_dir.name
         bin_path = SKILLS_ROOT / name / "bin"
-        exe_hint = (
-            f"\n_executables: `{bin_path}` (on $PATH)_\n"
-            if bin_path.is_dir()
-            else "\n_(no local bin/ — instructions only)_\n"
-        )
-        chunks.append(f"### Skill: {name}\n{exe_hint}\n{instructions.strip()}\n")
-        log.info("loaded skill %s (bin_present=%s)", name, bin_path.is_dir())
+        if bin_path.is_dir():
+            playbook_chunks.append(
+                f"### Playbook: {name}\n_executables: `{bin_path}` (on $PATH, invoke via `run_shell`)_\n\n{text}\n"
+            )
+        else:
+            policy_chunks.append(f"### Policy: {name}\n\n{text}\n")
+        log.info("loaded skill %s (bin_present=%s, chars=%d)", name, bin_path.is_dir(), len(text))
 
-    if not chunks:
+    if not policy_chunks and not playbook_chunks:
         return ""
-    return (
-        "\n\n## Available playbooks (Foundry Skills)\n\n"
-        "The following skill packages are registered on this Foundry project. Their\n"
-        "executables (when present) live under `/opt/skills/<name>/bin/` and are on\n"
-        "$PATH; invoke them via `run_shell`. Each skill's instructions describe when\n"
-        "and how to use it.\n\n"
-        + "\n---\n\n".join(chunks)
-    )
+
+    parts: list[str] = []
+    if policy_chunks:
+        parts.append(
+            "\n\n## MANDATORY behavior policies (Foundry Skills)\n\n"
+            "The following are RULES governing how you operate. They are not optional\n"
+            "reference material. Apply each one continuously, on every turn, BEFORE the\n"
+            "task-specific workflow described above. If a policy conflicts with the\n"
+            "default workflow, the policy wins. Do not summarize, restate, or quote the\n"
+            "policy text back to the user — just follow it.\n\n"
+            + "\n---\n\n".join(policy_chunks)
+        )
+    if playbook_chunks:
+        parts.append(
+            "\n\n## Available playbooks (Foundry Skills)\n\n"
+            "The following skill packages ship executables under `/opt/skills/<name>/bin/`\n"
+            "(on $PATH). Invoke them via `run_shell`. Each playbook's instructions\n"
+            "describe when and how to use it; prefer them over hand-rolled equivalents.\n\n"
+            + "\n---\n\n".join(playbook_chunks)
+        )
+    return "\n".join(parts)
 
 
 async def main() -> None:
