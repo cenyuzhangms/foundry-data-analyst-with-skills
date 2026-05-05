@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""eda-quick-look: one-shot profile of a CSV/Parquet/JSON dataset."""
+import argparse
+import os
+import sys
+from pathlib import Path
+
+import duckdb
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+
+def load(src: str) -> pd.DataFrame:
+    # DuckDB auto-reads csv/parquet/json from local or http(s).
+    if src.lower().endswith(".csv"):
+        return duckdb.sql(f"SELECT * FROM read_csv_auto('{src}', SAMPLE_SIZE=-1)").df()
+    if src.lower().endswith((".parquet", ".pq")):
+        return duckdb.sql(f"SELECT * FROM read_parquet('{src}')").df()
+    if src.lower().endswith(".json") or src.lower().endswith(".ndjson"):
+        return duckdb.sql(f"SELECT * FROM read_json_auto('{src}')").df()
+    # Try parquet then csv
+    try:
+        return duckdb.sql(f"SELECT * FROM read_parquet('{src}')").df()
+    except Exception:
+        return duckdb.sql(f"SELECT * FROM read_csv_auto('{src}', SAMPLE_SIZE=-1)").df()
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Quick EDA profile.")
+    ap.add_argument("src", help="path or URL to csv/parquet/json")
+    ap.add_argument("--out", default="", help="output PNG path for correlation heatmap")
+    ap.add_argument("--rows", type=int, default=2_000_000, help="cap rows when remote/large")
+    args = ap.parse_args()
+
+    print(f"# eda-quick-look: {args.src}")
+    df = load(args.src)
+    if len(df) > args.rows:
+        df = df.sample(args.rows, random_state=0)
+        print(f"(subsampled to {args.rows:,} rows)")
+
+    print(f"\n## shape: {df.shape[0]:,} rows x {df.shape[1]} cols\n")
+
+    print("## dtypes & null %\n")
+    nulls = (df.isna().mean() * 100).round(2)
+    info = pd.DataFrame({"dtype": df.dtypes.astype(str), "null_pct": nulls})
+    print(info.to_string())
+
+    num = df.select_dtypes(include=[np.number])
+    if not num.empty:
+        print("\n## numeric describe()\n")
+        print(num.describe().T.round(4).to_string())
+
+    obj = df.select_dtypes(exclude=[np.number, "datetime64[ns]"])
+    if not obj.empty:
+        print("\n## top-5 values per categorical column\n")
+        for c in obj.columns[:30]:
+            vc = df[c].astype("string").value_counts(dropna=False).head(5)
+            print(f"\n### {c}  (cardinality={df[c].nunique(dropna=True)})")
+            print(vc.to_string())
+
+    if num.shape[1] >= 2:
+        out = args.out or f"/work/eda_{Path(args.src).stem or 'data'}.png"
+        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+        corr = num.corr(numeric_only=True)
+        fig, ax = plt.subplots(figsize=(max(6, 0.5 * len(corr)), max(5, 0.5 * len(corr))))
+        im = ax.imshow(corr.values, vmin=-1, vmax=1, cmap="coolwarm")
+        ax.set_xticks(range(len(corr.columns)))
+        ax.set_xticklabels(corr.columns, rotation=45, ha="right")
+        ax.set_yticks(range(len(corr.columns)))
+        ax.set_yticklabels(corr.columns)
+        for i in range(len(corr)):
+            for j in range(len(corr)):
+                ax.text(j, i, f"{corr.values[i, j]:.2f}", ha="center", va="center", fontsize=7,
+                        color="white" if abs(corr.values[i, j]) > 0.5 else "black")
+        fig.colorbar(im, ax=ax, shrink=0.7)
+        ax.set_title("Correlation matrix")
+        fig.tight_layout()
+        fig.savefig(out, dpi=110)
+        print(f"\n## correlation heatmap saved: {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

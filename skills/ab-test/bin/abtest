@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""ab-test: rigorous two-arm A/B analysis (binary or continuous metric)."""
+import argparse
+import sys
+
+import numpy as np
+import pandas as pd
+from scipy import stats
+
+
+def is_binary(s: pd.Series) -> bool:
+    u = pd.unique(s.dropna())
+    return len(u) <= 2 and set(np.unique(u.astype(int))).issubset({0, 1})
+
+
+def two_prop_z(x_c, n_c, x_v, n_v):
+    p_c, p_v = x_c / n_c, x_v / n_v
+    p_pool = (x_c + x_v) / (n_c + n_v)
+    se_pool = np.sqrt(p_pool * (1 - p_pool) * (1 / n_c + 1 / n_v))
+    se_unp = np.sqrt(p_c * (1 - p_c) / n_c + p_v * (1 - p_v) / n_v)
+    z = (p_v - p_c) / se_pool
+    p = 2 * (1 - stats.norm.cdf(abs(z)))
+    diff = p_v - p_c
+    ci = (diff - 1.96 * se_unp, diff + 1.96 * se_unp)
+    # observed power (alpha=0.05, two-sided)
+    z_alpha = 1.96
+    power = 1 - stats.norm.cdf(z_alpha - abs(diff) / se_unp) + stats.norm.cdf(-z_alpha - abs(diff) / se_unp)
+    # MDE (alpha=0.05, power=0.8)
+    mde = (z_alpha + 0.84) * se_unp
+    return dict(test="two-proportion z", p_c=p_c, p_v=p_v, diff=diff, ci=ci, p=p, power=power, mde=mde)
+
+
+def welch_t(x_c, x_v):
+    m_c, m_v = np.mean(x_c), np.mean(x_v)
+    s_c, s_v = np.std(x_c, ddof=1), np.std(x_v, ddof=1)
+    n_c, n_v = len(x_c), len(x_v)
+    se = np.sqrt(s_c**2 / n_c + s_v**2 / n_v)
+    diff = m_v - m_c
+    t_stat, p = stats.ttest_ind(x_v, x_c, equal_var=False)
+    df = (s_c**2 / n_c + s_v**2 / n_v) ** 2 / ((s_c**2 / n_c) ** 2 / (n_c - 1) + (s_v**2 / n_v) ** 2 / (n_v - 1))
+    tcrit = stats.t.ppf(0.975, df)
+    ci = (diff - tcrit * se, diff + tcrit * se)
+    z_alpha = 1.96
+    power = 1 - stats.norm.cdf(z_alpha - abs(diff) / se) + stats.norm.cdf(-z_alpha - abs(diff) / se)
+    mde = (z_alpha + 0.84) * se
+    return dict(test="Welch's t", m_c=m_c, m_v=m_v, s_c=s_c, s_v=s_v, diff=diff, ci=ci, p=float(p), power=power, mde=mde)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--control")
+    ap.add_argument("--variant")
+    ap.add_argument("--data")
+    ap.add_argument("--group", default="group")
+    ap.add_argument("--metric", required=True)
+    args = ap.parse_args()
+
+    if args.data:
+        df = pd.read_csv(args.data) if args.data.endswith(".csv") else pd.read_parquet(args.data)
+        groups = df[args.group].unique()
+        if len(groups) != 2:
+            print(f"need exactly 2 groups in {args.group!r}, got {list(groups)}", file=sys.stderr)
+            return 2
+        c_label, v_label = sorted(groups, key=str)
+        c = df[df[args.group] == c_label][args.metric].dropna()
+        v = df[df[args.group] == v_label][args.metric].dropna()
+    elif args.control and args.variant:
+        c = (pd.read_csv(args.control) if args.control.endswith(".csv") else pd.read_parquet(args.control))[args.metric].dropna()
+        v = (pd.read_csv(args.variant) if args.variant.endswith(".csv") else pd.read_parquet(args.variant))[args.metric].dropna()
+        c_label, v_label = "control", "variant"
+    else:
+        print("provide either --data --group, or --control --variant", file=sys.stderr)
+        return 2
+
+    print(f"# A/B test on metric={args.metric}")
+    print(f"control={c_label}  n={len(c):,}")
+    print(f"variant={v_label}  n={len(v):,}\n")
+
+    if is_binary(c) and is_binary(v):
+        r = two_prop_z(int(c.sum()), len(c), int(v.sum()), len(v))
+        print(f"test:           {r['test']}")
+        print(f"p(control):     {r['p_c']:.4f}")
+        print(f"p(variant):     {r['p_v']:.4f}")
+        print(f"abs lift:       {r['diff']:+.4f}")
+        if r['p_c'] > 0:
+            print(f"rel lift:       {(r['diff'] / r['p_c']) * 100:+.2f}%")
+        print(f"95% CI on diff: [{r['ci'][0]:+.4f}, {r['ci'][1]:+.4f}]")
+        print(f"p-value:        {r['p']:.4g}")
+        print(f"observed power: {r['power']:.2f}")
+        print(f"MDE @ 80% pwr:  {r['mde']:.4f}")
+    else:
+        r = welch_t(c.values, v.values)
+        print(f"test:           {r['test']}")
+        print(f"mean(control):  {r['m_c']:.4f}  (sd={r['s_c']:.4f})")
+        print(f"mean(variant):  {r['m_v']:.4f}  (sd={r['s_v']:.4f})")
+        print(f"abs lift:       {r['diff']:+.4f}")
+        if r['m_c'] != 0:
+            print(f"rel lift:       {(r['diff'] / r['m_c']) * 100:+.2f}%")
+        print(f"95% CI on diff: [{r['ci'][0]:+.4f}, {r['ci'][1]:+.4f}]")
+        print(f"p-value:        {r['p']:.4g}")
+        print(f"observed power: {r['power']:.2f}")
+        print(f"MDE @ 80% pwr:  {r['mde']:.4f}")
+
+    verdict = "SIGNIFICANT" if r["p"] < 0.05 else "not significant"
+    print(f"\nverdict @ alpha=0.05: {verdict}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
