@@ -1,42 +1,41 @@
-# Foundry Data Analyst Sandbox + Skills
+# Foundry Hosted Agent + Skills demo
 
-Same data analyst sandbox as
-[`foundry-data-analyst-agent`](https://github.com/cenyuzhangms/foundry-data-analyst-agent),
-but layered with **Foundry Skills**: at startup the agent discovers all skills
-registered on its Foundry project, unzips each into `/opt/skills/<name>/`,
-prepends `bin/` to `$PATH`, and appends every `SKILL.md` to the system prompt.
+A hosted Foundry agent that demonstrates **Foundry Skills**: at startup the
+agent reads every `skills/<name>/SKILL.md` in this repo and appends them to
+its system prompt. Skills with a `bin/` directory also have their executable
+baked into the container image at `/opt/skills/<name>/bin/` on `$PATH`, so
+the agent can invoke them via the `run_shell` tool.
 
-Result: the LLM both **knows** which playbooks exist (Pattern A — system-prompt
-injection) and can **execute** them (Pattern C — bin/ on PATH, invoked via
-`run_shell`).
+Result: the LLM both **knows** which playbooks/policies exist (Pattern A —
+system-prompt injection) and, when applicable, can **execute** them
+(Pattern C — `bin/` on `$PATH`).
 
 ## Skills shipped in this repo
 
-Two flavors:
-
-**Binary-backed** (`SKILL.md` + `bin/<exe>` baked into the image, on `$PATH`):
-
-| Skill | Command | Purpose |
-|---|---|---|
-| `eda-quick-look` | `eda <path-or-url>` | one-shot dataset profile + correlation heatmap |
-| `ab-test` | `abtest --control c.csv --variant v.csv --metric m` | two-arm A/B with the right test, CI, p, power, MDE |
-| `time-series-decompose` | `tsdecomp --data x.csv --date d --value v` | STL decomposition + ADF + ACF/PACF |
-
-**Prose-only** (`SKILL.md` only — agent-behavior policies, no executable):
+**Prose-only policy** (`SKILL.md` only — shapes how the agent responds):
 
 | Skill | Purpose |
 |---|---|
-| `long-running-jobs` | background commands >30s with `nohup`, return control, poll later |
-| `explain-before-running` | one-line "what / what could go wrong" before each non-readonly `run_shell` |
-| `stop-when-stuck` | after 2 same-approach failures, stop and ask for direction instead of brute-forcing |
+| `exec-summary` | every recommendation/decision opens with TL;DR / Confidence / Recommended-action |
 
-The prose-only skills demonstrate that a Foundry Skill is fundamentally a
-**playbook**, not a tool — they ship zero new code and still change agent
-behavior because their text is appended to the system prompt at startup.
+**Binary-backed playbooks** (`SKILL.md` + `bin/<exe>` baked into the image):
+
+| Skill | Command | Purpose |
+|---|---|---|
+| `prd` | `prd "<feature title>"` | generate a one-page PRD scaffold (Problem / Users / Goals / Non-goals / Solution / Metrics / Open questions); save to `/work/prd/<slug>-<date>.md` |
+| `five-whys` | `whys "<symptom>"` | run a 5-Whys root-cause chain; save to `/work/whys/<slug>-<date>.md` |
+
+Each binary prints a Markdown scaffold with `<TODO: …>` slots; the agent then
+fills them in using model knowledge and the user's description, and re-saves
+the filled version.
+
+The prose-only `exec-summary` skill demonstrates that a Foundry Skill is
+fundamentally a **playbook**, not a tool — it ships zero new code and still
+changes agent behavior because its text is appended to the system prompt.
 
 See [`skills/`](./skills).
 
-## Tools (same as base agent)
+## Tools
 
 `run_shell`, `read_file`, `save_artifact_as_data_url`, `fetch_url`.
 
@@ -49,10 +48,11 @@ azure.yaml              # azd service definition
 Dockerfile              # bakes skills/<name>/bin/ into /opt/skills/<name>/bin/ on $PATH
 requirements.txt        # python deps
 skills/<name>/
-  SKILL.md              # what + when + how (registered on Foundry)
+  SKILL.md              # what + when + how (read locally at startup; also registered on Foundry)
   bin/<exe>             # optional executable (binary-backed skills only)
 scripts/
-  register_skills.py    # host-side: POST /skills?api-version=v1 for each SKILL.md
+  register_skills.py    # host-side: registers each SKILL.md on the Foundry project,
+                        #   and deletes stale server-side skills not present locally
 infra/                  # bicep (project, ACR, RBAC)
 ```
 
@@ -62,7 +62,7 @@ infra/                  # bicep (project, ACR, RBAC)
 azd ai agent init -p <foundry-project-arm-id> -d gpt-4.1-mini --src .
 azd deploy foundry-data-analyst-with-skills
 
-# register the skills with the Foundry project (one-time):
+# register the skills with the Foundry project (one-time, also re-run after edits):
 pip install azure-ai-projects==2.1.0
 python scripts/register_skills.py --endpoint <project-endpoint>
 ```
@@ -71,9 +71,11 @@ After first deploy, grant the instance MI:
 - `AcrPull` on the project ACR
 - `Cognitive Services OpenAI User` + `Cognitive Services User` on the Foundry account
 
-Then ask the agent something like:
+## Try it
 
-> "Run an A/B test on `/work/exp.csv` (group column `arm`, metric `converted`) and tell me if variant beats control."
-
-It will look at its playbooks list, decide `abtest` is the right tool, and call
-it via `run_shell`.
+- **exec-summary**: "Should we move our metrics pipeline from cron to Airflow?"
+  → answer opens with the TL;DR / Confidence / Recommended-action block.
+- **prd**: "Draft a PRD for adding SSO to our admin portal."
+  → agent runs `prd "SSO for admin portal"`, fills the `<TODO>` slots, saves to `/work/prd/...`.
+- **five-whys**: "Our deploys have failed twice this week — help me figure out why."
+  → agent runs `whys "deploys failing"`, fills the 5-row chain, ends with root cause + corrective action.

@@ -42,8 +42,8 @@ RUN set -eux; \
         done; \
     fi
 # Make skill bin/ dirs visible to bash -lc (used by the run_shell tool).
-RUN printf 'export PATH="/opt/skills/eda-quick-look/bin:/opt/skills/ab-test/bin:/opt/skills/time-series-decompose/bin:$PATH"\n' > /etc/profile.d/skills-path.sh
-ENV PATH="/opt/skills/eda-quick-look/bin:/opt/skills/ab-test/bin:/opt/skills/time-series-decompose/bin:${PATH}"
+RUN printf 'export PATH="/opt/skills/prd/bin:/opt/skills/five-whys/bin:$PATH"\n' > /etc/profile.d/skills-path.sh
+ENV PATH="/opt/skills/prd/bin:/opt/skills/five-whys/bin:${PATH}"
 
 EXPOSE 8088
 

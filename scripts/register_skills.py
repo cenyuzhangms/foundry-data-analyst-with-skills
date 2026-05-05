@@ -32,6 +32,15 @@ async def main() -> int:
             existing.append(getattr(sk, "name", None))
         print(f"existing skills on project: {existing}")
 
+        local_names = {p.name for p in root.iterdir() if p.is_dir() and (p / "SKILL.md").exists()}
+        stale = [n for n in existing if n and n not in local_names]
+        for n in stale:
+            print(f"deleting stale server-side skill {n}...")
+            try:
+                await project.beta.skills.delete(name=n)
+            except Exception as exc:
+                print(f"  delete failed: {exc!r}")
+
         for skill_dir in sorted(p for p in root.iterdir() if p.is_dir()):
             name = skill_dir.name
             md = skill_dir / "SKILL.md"

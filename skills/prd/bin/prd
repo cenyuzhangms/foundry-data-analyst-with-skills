@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""prd — emit a one-page PRD scaffold to stdout and to /work/prd/<slug>-<date>.md.
+
+Usage:
+  prd "<title>" [--problem "<text>"] [--users "<text>"] [--solution "<text>"]
+"""
+from __future__ import annotations
+import argparse
+import datetime as dt
+import re
+import sys
+from pathlib import Path
+
+
+def slugify(s: str) -> str:
+    s = s.lower().strip()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-")[:60] or "untitled"
+
+
+TEMPLATE = """# {title}
+
+**One-line summary**: <TODO: one sentence the reader could repeat at the watercooler>
+
+---
+
+## 1. Problem
+
+{problem}
+
+## 2. Users / personas
+
+{users}
+
+**Not for**: <TODO: one user/segment we are explicitly not targeting; this prevents scope creep>
+
+## 3. Goals (measurable)
+
+- <TODO: Goal 1 with a target number and a window, e.g. "Reduce p95 checkout latency to <200ms within 30 days">
+- <TODO: Goal 2 with a target number>
+- <TODO: Goal 3 with a target number>
+
+## 4. Non-goals
+
+- <TODO: Thing we will NOT do, even though someone might ask>
+- <TODO: Thing we will NOT do>
+- <TODO: Thing we will NOT do>
+
+## 5. Proposed solution
+
+{solution}
+
+User-visible changes:
+- <TODO: change 1>
+- <TODO: change 2>
+- <TODO: change 3>
+
+## 6. Success metrics
+
+| Metric | Baseline | Target | Window | Source |
+|---|---|---|---|---|
+| <TODO: metric> | <TODO> | <TODO> | <TODO: e.g. 30 days post-launch> | <TODO: which dashboard / log> |
+| <TODO: metric> | <TODO> | <TODO> | <TODO> | <TODO> |
+
+## 7. Open questions
+
+1. <TODO: question> — owner: <TODO: person/team>
+2. <TODO: question> — owner: <TODO: person/team>
+3. <TODO: question> — owner: <TODO: person/team>
+
+---
+
+_Generated {timestamp} by `prd` skill. Replace every `<TODO: …>` with concrete content before sharing._
+"""
+
+
+def main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("title", help="feature title")
+    p.add_argument("--problem", default="<TODO: who is hurting, how often, and how do they describe the pain in their own words?>")
+    p.add_argument("--users", default="<TODO: primary persona; secondary persona; rough size of each>")
+    p.add_argument("--solution", default="<TODO: one paragraph; what changes for the user, what changes for the system>")
+    p.add_argument("--out-dir", default="/work/prd")
+    args = p.parse_args(argv)
+
+    body = TEMPLATE.format(
+        title=args.title,
+        problem=args.problem,
+        users=args.users,
+        solution=args.solution,
+        timestamp=dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+    )
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{slugify(args.title)}-{dt.date.today().isoformat()}.md"
+    out_path.write_text(body, encoding="utf-8")
+
+    sys.stdout.write(body)
+    if not body.endswith("\n"):
+        sys.stdout.write("\n")
+    sys.stdout.write(f"\nsaved={out_path}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
